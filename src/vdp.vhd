@@ -2,10 +2,20 @@
 --  vdp.vhd
 --   VHDL Source of ESE-VDP.
 --
---    Copyright (C)2000-2003 Kunihiko Ohnaka
+--    Copyright (C)2000-2004 Kunihiko Ohnaka
 --              All rights reserved.
 --
 -- JP: 日本語のコメント行は JP:を頭に付ける事にする
+--
+-- 17th,January,2004 modified by Kunihiko Ohnaka
+-- JP: LMCMを実装.VDPコマンド全般にまだ不具合あり.
+--
+-- 15th,January,2004 modified by Kunihiko Ohnaka
+-- JP: VDPコマンドの実装を開始
+-- JP: HMMC,HMMM,YMMM,HMMV,LMMC,LMMM,LMMVを実装.まだ不具合あり.
+--
+-- 12th,January,2004 modified by Kunihiko Ohnaka
+-- JP: コメントの修正
 --
 -- 30th,December,2003 modified by Kazuhiro Tsujikawa
 -- JP: 起動時の画面モードをNTSCと VGAのどちらにするかを，外部入力で切替
@@ -227,6 +237,30 @@ architecture rtl of vdp is
   signal VdpR18Adjust : std_logic_vector( 7 downto 0);
   signal VdpR19HSyncIntLine : std_logic_vector( 7 downto 0);
   signal VdpR23VStartLine : std_logic_vector( 7 downto 0);
+  signal VdpS7ReadData : std_logic_vector( 7 downto 0);
+  signal VdpS8S9SrchX : std_logic_vector( 9 downto 0);
+
+
+  constant VdpCmdHMMC : std_logic_vector( 3 downto 0) := "1111";
+  constant VdpCmdYMMM : std_logic_vector( 3 downto 0) := "1110";
+  constant VdpCmdHMMM : std_logic_vector( 3 downto 0) := "1101";
+  constant VdpCmdHMMV : std_logic_vector( 3 downto 0) := "1100";
+  constant VdpCmdLMMC : std_logic_vector( 3 downto 0) := "1011";
+  constant VdpCmdLMCM : std_logic_vector( 3 downto 0) := "1010";
+  constant VdpCmdLMMM : std_logic_vector( 3 downto 0) := "1001";
+  constant VdpCmdLMMV : std_logic_vector( 3 downto 0) := "1000";
+
+  constant VdpCmdIMP : std_logic_vector( 3 downto 0) := "0000";
+  constant VdpCmdAND : std_logic_vector( 3 downto 0) := "0001";
+  constant VdpCmdOR  : std_logic_vector( 3 downto 0) := "0010";
+  constant VdpCmdEOR : std_logic_vector( 3 downto 0) := "0011";
+  constant VdpCmdNOT : std_logic_vector( 3 downto 0) := "0100";
+  constant VdpCmdTIMP : std_logic_vector( 3 downto 0) := "1000";
+  constant VdpCmdTAND : std_logic_vector( 3 downto 0) := "1001";
+  constant VdpCmdTOR  : std_logic_vector( 3 downto 0) := "1010";
+  constant VdpCmdTEOR : std_logic_vector( 3 downto 0) := "1011";
+  constant VdpCmdTNOT : std_logic_vector( 3 downto 0) := "1100";
+
   signal VdpModeText1 : std_logic;      -- text mode 1    (SCREEN0)
   signal VdpModeText2 : std_logic;      -- text mode 2    (SCREEN0 width 80)
   signal VdpModeGraphic1 : std_logic;   -- graphic mode 1 (SCREEN1)
@@ -339,6 +373,51 @@ architecture rtl of vdp is
   signal paletteWrReqG : std_logic;
   signal paletteWrAckG : std_logic;
 
+-- VDP Command Signals
+  signal VdpCmdSX : std_logic_vector( 8 downto 0);  -- R33,32
+  signal VdpCmdSY : std_logic_vector( 9 downto 0);  -- R35,34
+  signal VdpCmdDX : std_logic_vector( 8 downto 0);  -- R37,36
+  signal VdpCmdDY : std_logic_vector( 9 downto 0);  -- R39,38
+  signal VdpCmdNX : std_logic_vector( 8 downto 0);  -- R41,40
+  signal VdpCmdNY : std_logic_vector( 9 downto 0);  -- R43,42
+  signal VdpCmdCLR : std_logic_vector( 7 downto 0);  -- R44
+  signal VdpCmdDIX : std_logic;                      -- R45 bit 2
+  signal VdpCmdDIY : std_logic;                      -- R45 bit 3
+  signal VdpCmdMXS : std_logic;                      -- R45 bit 4
+  signal VdpCmdMXD : std_logic;                      -- R45 bit 5
+  signal VdpCmdCMR : std_logic_vector( 7 downto 0);  -- R46
+  signal VdpCmdTR : std_logic;  -- S#2 (bit 7)
+  signal VdpCmdCE : std_logic;  -- S#2 (bit 0)
+
+  signal VdpCmdRegNum : std_logic_vector(3 downto 0);
+  signal VdpCmdRegData : std_logic_vector(7 downto 0);
+  signal VdpCmdRegWrReq : std_logic;
+  signal VdpCmdRegWrAck : std_logic;
+  signal VdpCmdTRClrReq : std_logic;
+  signal VdpCmdTRClrAck : std_logic;
+  signal VdpCmdCLRWr : std_logic;
+  signal VdpCmdCMRWr : std_logic;
+  signal VdpCmdVramWrAck : std_logic;
+  signal VdpCmdVramWrReq : std_logic;
+  signal VdpCmdVramRdAck : std_logic;
+  signal VdpCmdVramRdReq : std_logic;
+  signal VdpCmdVramAccessAddr : std_logic_vector( 16 downto 0);
+  signal VdpCmdVramReading : std_logic;
+  signal VdpCmdVramRdData : std_logic_vector(7 downto 0);
+  signal VdpCmdVramWrData : std_logic_vector(7 downto 0);
+  signal VdpCmdSXTmp : std_logic_vector( 8 downto 0);
+  signal VdpCmdDXTmp : std_logic_vector( 8 downto 0);
+  signal VdpCmdNXTmp : std_logic_vector( 8 downto 0);
+
+  -- state register
+  type typVdpCmdState is (stVdpCmdIdle, stVdpCmdChkLoop,
+                          stVdpCmdRdCPU, stVdpCmdWaitCPU,
+                          stVdpCmdRdVram, stVdpCmdWaitRdVram,
+                          stVdpCmdPreRdVram, stVdpCmdWaitPreRdVram,
+                          stVdpCmdWrVram, stVdpCmdWaitWrVram, stVdpCmdExecEnd );
+  signal VdpCmdState : typVdpCmdState;
+
+--
   signal iVideoR : std_logic_vector( 5 downto 0);
   signal iVideoG : std_logic_vector( 5 downto 0);
   signal iVideoB : std_logic_vector( 5 downto 0);
@@ -356,6 +435,7 @@ architecture rtl of vdp is
   signal iVideoB_vga : std_logic_vector( 5 downto 0);
   signal iVideoHS_n_vga : std_logic;
   signal iVideoVS_n_vga : std_logic;
+
   
 begin
   ----------------------------------------------------------------
@@ -387,7 +467,7 @@ begin
                        iVideoHS_n_vga,
                        iVideoVS_n_vga);
   
-  -- JP: 独自に拡張したモードレジスタ( VDP #4ポート)で 画面モードを変える
+  -- JP: 外部から与えられるモード選択信号で 画面モードを変える
   pVideoR <= iVideoR_ntsc when dispModeVGA = '0' else iVideoR_vga;
   pVideoG <= iVideoG_ntsc when dispModeVGA = '0' else iVideoG_vga; 
   pVideoB <= iVideoB_ntsc when dispModeVGA = '0' else iVideoB_vga;
@@ -895,6 +975,10 @@ begin
       VdpVramAddrSetAck <= '0';
       VdpVramAccessAddr <= (others => '0');
 
+      VdpCmdVramWrAck <= '0';
+      VdpCmdVramRdAck <= '0';
+      VdpCmdVramReading <= '0';
+      VdpCmdVramRdData <= (others => '0');
     elsif (clk21m'event and clk21m = '1') then
       if( h_counter = CLOCKS_PER_LINE-1) then
         dotState <= "00";
@@ -1066,6 +1150,9 @@ begin
             pRamWe_n <= '0';
             VdpVramWrAck <= not VdpVramWrAck;
           elsif( VdpVramRdReq /= VdpVramRdAck ) then
+            -- JP: VRAMからの読み込み
+            -- JP: GRAPHIC6,7ではアドレスと RAM上の位置が他の画面モードと
+            -- JP: 異るので注意(要修正)
             if( VdpVramAddrSetReq /= VdpVramAddrSetAck ) then
               pRamAdr <= VdpVramAccessAddrTmp;
               VdpVramAccessAddr <= VdpVramAccessAddrTmp + 1;
@@ -1125,6 +1212,34 @@ begin
               when others =>
                 null;
             end case;
+          elsif( VdpCmdVramWrReq /= VdpCmdVramWrAck ) then
+            -- JP: VDPコマンドによるVRAMへの書き込み
+            -- JP: GRAPHIC6,7ではアドレスと RAM上の位置が他の画面モードと
+            -- JP: 異るので注意
+            if( VdpModeGraphic7 = '1' ) then
+              pRamAdr <= VdpCmdVramAccessAddr(0) &
+                         VdpCmdVramAccessAddr(16 downto 1);
+            else
+              pRamAdr <= VdpCmdVramAccessAddr;
+            end if;
+            pRamDat <= VdpCmdVramWrData;
+            pRamOe_n <= '1';
+            pRamWe_n <= '0';
+            VdpCmdVramWrAck <= not VdpCmdVramWrAck;
+          elsif( VdpCmdVramRdReq /= VdpCmdVramRdAck ) then
+            -- JP: VDPコマンドによるVRAMからの読み込み
+            -- JP: GRAPHIC6,7ではアドレスと RAM上の位置が他の画面モードと
+            -- JP: 異るので注意
+            if( VdpModeGraphic7 = '1' ) then
+              pRamAdr <= VdpCmdVramAccessAddr(0) &
+                         VdpCmdVramAccessAddr(16 downto 1);
+            else
+              pRamAdr <= VdpCmdVramAccessAddr;
+            end if;
+            pRamDat <= (others => 'Z');
+            pRamOe_n <= '0';
+            pRamWe_n <= '1';
+            VdpCmdVramReading <= '1';
           end if;
           if( bwindow = '1' ) then
             if( VdpModeGraphic7 = '1' ) then
@@ -1181,6 +1296,11 @@ begin
             VdpVramRdData <= pRamDat;
           end if;
           VdpVramReading <= '0';
+          if( VdpCmdVramReading = '1' ) then
+            VdpCmdVramRdData <= pRamDat;
+            VdpCmdVramRdAck <= not VdpCmdVramRdAck;
+          end if;
+          VdpCmdVramReading <= '0';
 --          pRamWe_n <= '1';
 --          pRamOe_n <= '1';
           pRamDat <= (others => 'Z');
@@ -1724,6 +1844,12 @@ begin
       VdpR18Adjust <= (others => '0');
       VdpR19HSyncIntLine <= (others => '0');
       VdpR23VStartLine <= (others => '0');
+
+      VdpCmdRegNum <= (others => '0');
+      VdpCmdRegData <= (others => '0');
+      VdpCmdRegWrReq <= '0';
+      VdpCmdTRClrReq <= '0';
+      
       -- palette
       paletteWrTemp <= (others => '0');
       paletteWrReqRB <= '0';
@@ -1747,7 +1873,7 @@ begin
 
             case VdpR15StatusRegNum is
               when "0000" =>
-                -- 未実装あり
+                -- JP: 未実装あり
                 if( vsyncIntAck /= vsyncIntReq ) then
                   vsyncIntAck <= not vsyncIntAck;
                   dbi <= '1' & "0000000";
@@ -1755,7 +1881,7 @@ begin
                   dbi <= '0' & "0000000";
                 end if;
               when "0001" =>
-                -- 未実装あり
+                -- JP: 未実装あり
                 if( hsyncIntAck /= hsyncIntReq ) then
                   hsyncIntAck <= not hsyncIntAck;
                   dbi <= "00" & VDP_ID & '1';
@@ -1764,7 +1890,12 @@ begin
                 end if;
               when "0010" =>
 --                dbi <= '1' & not iVideoVS_n & not iVideoHS_n & '0' & "11" & field & '0';
-                dbi <= '1' & not bwindow_y & not bwindow_x & '0' & "11" & field & '0';
+--                dbi <= '1' & not bwindow_y & not bwindow_x & '0' & "11" & field & '0';
+                dbi <= VdpCmdTR & not bwindow_y & not bwindow_x & '0' & "11" & field & VdpCmdCE;
+              when "0111" =>
+                -- LMCM command read
+                dbi <= VdpS7ReadData;
+                VdpCmdTRClrReq <= not VdpCmdTRClrAck;
               when others =>
                 dbi <= (others => '0');
             end case;
@@ -1839,58 +1970,65 @@ begin
 
       elsif (VdpRegWrPulse = '1') then -- register write
         VdpRegWrPulse <= '0';
-        case VdpRegPtr is
-          when "000000" =>   -- #00
-            VdpR0DispNum <= VdpP1Data(3 downto 1);
-            VdpR0HSyncIntEn <= VdpP1Data(4);
-          when "000001" =>   -- #01
-            VdpR1SpZoom <= VdpP1Data(0);
-            VdpR1SpSize <= VdpP1Data(1);
-            VdpR1DispMode <= VdpP1Data(4 downto 3);
-            VdpR1VSyncIntEn <= VdpP1Data(5);
-            VdpR1DispOn <= VdpP1Data(6);
-          when "000010" =>   -- #02
-            VdpR2PtnNameTblBaseAddr <= VdpP1Data( 6 downto 0);
-          when "000011" =>   -- #03
-            VdpR10R3ColorTblBaseAddr(7 downto 0) <= VdpP1Data( 7 downto 0);
-          when "000100" =>   -- #04
-            VdpR4PtnGeneTblBaseAddr <= VdpP1Data( 5 downto 0);
-          when "000101" =>   -- #05
-            VdpR11R5SpAttrTblBaseAddr(7 downto 0) <= VdpP1Data;
-          when "000110" =>   -- #06
-            VdpR6SpPtnGeneTblBaseAddr <= VdpP1Data( 5 downto 0);
-          when "000111" =>   -- #07
-            VdpR7FrameColor <= VdpP1Data( 7 downto 0 );
-          when "001000" =>   -- #08
-            VdpR8SpOff <= VdpP1Data(1);
-            VdpR8Color0On <= VdpP1Data(5);
-          when "001001" =>   -- #09
-            VdpR9TwoPageMode <= VdpP1Data(2);
-            VdpR9InterlaceMode <= VdpP1Data(3);
-            VdpR9YDots <= VdpP1Data(7);
-          when "001010" =>   -- #10
-            VdpR10R3ColorTblBaseAddr(10 downto 8) <= VdpP1Data( 2 downto 0);
-          when "001011" =>   -- #11
-            VdpR11R5SpAttrTblBaseAddr( 9 downto 8) <= VdpP1Data( 1 downto 0);
-          when "001110" =>   -- #14
-            VdpVramAccessAddrTmp( 16 downto 14 ) <= VdpP1Data( 2 downto 0);
-            VdpVramAddrSetReq <= not VdpVramAddrSetAck;
-          when "001111" =>   -- #15
-            VdpR15StatusRegNum <= VdpP1Data( 3 downto 0);
-          when "010000" =>   -- #16
-            VdpR16PalNum <= VdpP1Data( 3 downto 0 );
-          when "010001" =>   -- #17
-            VdpR17RegNum <= VdpP1Data( 5 downto 0 );
-            VdpR17IncRegNum <= not VdpP1Data(7);
-          when "010010" =>   -- #18
-            VdpR18Adjust <= VdpP1Data;
-          when "010011" =>   -- #19
-            VdpR19HSyncIntLine <= VdpP1Data;
-          when "010111" =>    -- #23
-            VdpR23VStartLine <= VdpP1Data;
-          when others => null;
-        end case;
 
+        if ( VdpRegPtr(5) = '0') then
+          case VdpRegPtr(4 downto 0) is
+            when "00000" =>   -- #00
+              VdpR0DispNum <= VdpP1Data(3 downto 1);
+              VdpR0HSyncIntEn <= VdpP1Data(4);
+            when "00001" =>   -- #01
+              VdpR1SpZoom <= VdpP1Data(0);
+              VdpR1SpSize <= VdpP1Data(1);
+              VdpR1DispMode <= VdpP1Data(4 downto 3);
+              VdpR1VSyncIntEn <= VdpP1Data(5);
+              VdpR1DispOn <= VdpP1Data(6);
+            when "00010" =>   -- #02
+              VdpR2PtnNameTblBaseAddr <= VdpP1Data( 6 downto 0);
+            when "00011" =>   -- #03
+              VdpR10R3ColorTblBaseAddr(7 downto 0) <= VdpP1Data( 7 downto 0);
+            when "00100" =>   -- #04
+              VdpR4PtnGeneTblBaseAddr <= VdpP1Data( 5 downto 0);
+            when "00101" =>   -- #05
+              VdpR11R5SpAttrTblBaseAddr(7 downto 0) <= VdpP1Data;
+            when "00110" =>   -- #06
+              VdpR6SpPtnGeneTblBaseAddr <= VdpP1Data( 5 downto 0);
+            when "00111" =>   -- #07
+              VdpR7FrameColor <= VdpP1Data( 7 downto 0 );
+            when "01000" =>   -- #08
+              VdpR8SpOff <= VdpP1Data(1);
+              VdpR8Color0On <= VdpP1Data(5);
+            when "01001" =>   -- #09
+              VdpR9TwoPageMode <= VdpP1Data(2);
+              VdpR9InterlaceMode <= VdpP1Data(3);
+              VdpR9YDots <= VdpP1Data(7);
+            when "01010" =>   -- #10
+              VdpR10R3ColorTblBaseAddr(10 downto 8) <= VdpP1Data( 2 downto 0);
+            when "01011" =>   -- #11
+              VdpR11R5SpAttrTblBaseAddr( 9 downto 8) <= VdpP1Data( 1 downto 0);
+            when "01110" =>   -- #14
+              VdpVramAccessAddrTmp( 16 downto 14 ) <= VdpP1Data( 2 downto 0);
+              VdpVramAddrSetReq <= not VdpVramAddrSetAck;
+            when "01111" =>   -- #15
+              VdpR15StatusRegNum <= VdpP1Data( 3 downto 0);
+            when "10000" =>   -- #16
+              VdpR16PalNum <= VdpP1Data( 3 downto 0 );
+            when "10001" =>   -- #17
+              VdpR17RegNum <= VdpP1Data( 5 downto 0 );
+              VdpR17IncRegNum <= not VdpP1Data(7);
+            when "10010" =>   -- #18
+              VdpR18Adjust <= VdpP1Data;
+            when "10011" =>   -- #19
+              VdpR19HSyncIntLine <= VdpP1Data;
+            when "10111" =>    -- #23
+              VdpR23VStartLine <= VdpP1Data;
+            when others => null;
+          end case;
+        else
+          -- Registers for VDP Command
+          VdpCmdRegNum <= VdpRegPtr(3 downto 0);
+          VdpCmdRegData <= VdpP1Data;
+          VdpCmdRegWrReq <= not VdpCmdRegWrAck;
+        end if;
       end if;
 
     end if;
@@ -1898,5 +2036,411 @@ begin
 
   -- Display resolution (0=15kHz, 1=31kHz)
   dispModeVGA <= DispReso;
+
+  -----------------------------------------------------------------------------
+  --
+  -- VDP Command
+  --
+  -----------------------------------------------------------------------------
+
+  process( clk21m, reset )
+    variable nxCount : std_logic_vector(8 downto 0);
+    variable xCountUp : integer;
+    variable nxLoopEnd : std_logic;
+    variable x : std_logic_vector(8 downto 0);
+    variable logOpDestCol : std_logic_vector(7 downto 0);
+    variable logOpSoucCol : std_logic_vector(7 downto 0);
+  begin
+    if (reset = '1') then
+      nxCount := (others => '0');
+      nxLoopEnd := '0';
+      x := (others => '0');
+      xCountUp := 0;
+      VdpCmdState <= stVdpCmdIdle;
+      VdpCmdSX <= (others => '0');  -- R32
+      VdpCmdSY <= (others => '0');  -- R34
+      VdpCmdDX <= (others => '0');  -- R36
+      VdpCmdDY <= (others => '0');  -- R38
+      VdpCmdNX <= (others => '0');  -- R40
+      VdpCmdNY <= (others => '0');  -- R42
+      VdpCmdCLR <= (others => '0');  -- R44
+      VdpCmdDIX <= '0';  -- R45 bit 2
+      VdpCmdDIY <= '0';  -- R45 bit 3
+      VdpCmdMXS <= '0';  -- R45 bit 4
+      VdpCmdMXD <= '0';  -- R45 bit 5
+      VdpCmdCMR <= (others => '0');  -- R46
+      VdpCmdSXTmp <= (others => '0');
+      VdpCmdDXTmp <= (others => '0');
+      VdpCmdCLRWr <= '0';
+      VdpCmdCMRWr <= '0';
+      VdpCmdRegWrAck <= '0';
+      VdpCmdVramWrReq <= '0';
+      VdpCmdVramRdReq <= '0';
+      VdpCmdVramWrData <= (others => '0');
+
+      VdpCmdTR <= '1';                  -- Transfer Ready
+      VdpCmdCE <= '0';                  -- Command Executing
+      VdpCmdTRClrAck <= '0';
+
+      VdpS7ReadData <= (others => '0');
+    elsif (clk21m'event and clk21m = '1') then
+
+      case VdpCmdCMR(7 downto 4) is
+        -- JP: HMMC,HMMM,HMMVの横方向転送回数計算
+        when VdpCmdHMMC | VdpCmdHMMM | VdpCmdHMMV =>
+          if( (VdpModeGraphic4 = '1') or
+              (VdpModeGraphic6 = '1') ) then
+            -- GRAPHIC4,6
+            nxCount := '0' & VdpCmdNX(8 downto 1);
+            xCountUp := 2;
+          elsif( VdpModeGraphic5 = '1' ) then
+            -- GRAPHIC5
+            nxCount := "00" & VdpCmdNX(8 downto 2);
+            xCountUp := 4;
+          else
+            -- GRAPHIC7 and other
+            nxCount := VdpCmdNX;
+            xCountUp := 1;
+          end if;
+        -- JP: LMMC,LMCM,LMMM,LMMVの横方向転送回数計算
+        when VdpCmdLMMC | VdpCmdLMCM | VdpCmdLMMM | VdpCmdLMMV =>
+          nxCount := VdpCmdNX;
+          xCountUp := 1;
+        when others =>
+          nxCount := "000000001";
+      end case;
+
+      -- JP: 横方向ループ判定
+      case VdpCmdCMR(7 downto 4) is
+        when VdpCmdHMMC | VdpCmdHMMM | VdpCmdHMMV
+          |  VdpCmdLMMC | VdpCmdLMMM | VdpCmdLMMV
+          |  VdpCmdLMCM =>
+          if( VdpCmdNXTmp = 0 ) then
+            nxLoopEnd := '1';
+          else
+            nxLoopEnd := '0';
+          end if;
+        when VdpCmdYMMM =>
+          -- JP: DIX=0の時
+          -- JP:   VdpCmdDxTmpが256か257になったらループ
+          -- JP: DIX=1の時
+          -- JP:   VdpCmdDxTmp+2が0か1になったらループ
+          x := VdpCmdDXTmp+("0000000"&VdpCmdDIX&'0');  -- GRAPHIC 4
+          if( x(7 downto 0) = 0 ) then
+            nxLoopEnd := '1';
+          else
+            nxLoopEnd := '0';
+          end if;
+        when others =>
+          nxLoopEnd := '1';
+      end case;
+      
+      -- JP: ロジカルオペレーションの実行
+      -- JP: PreRdVramステートのみで有効
+      -- GRAPHI4
+      logOpSoucCol := "0000" & VdpCmdVramWrData(3 downto 0);
+      if( VdpCmdDxTmp(0) = '0' ) then
+        -- JP: 転送先が偶数ドット
+        logOpDestCol := "0000" & VdpCmdVramRdData(7 downto 4);
+      else
+        logOpDestCol := "0000" & VdpCmdVramRdData(3 downto 0);
+      end if;
+      case VdpCmdCMR(3 downto 0) is
+        when VdpCmdIMP =>
+          logOpDestCol := logOpSoucCol;
+        when VdpCmdAND =>
+          logOpDestCol := logOpSoucCol and logOpDestCol;
+        when VdpCmdOR =>
+          logOpDestCol := logOpSoucCol or logOpDestCol;
+        when VdpCmdEOR =>
+          logOpDestCol := logOpSoucCol xor logOpDestCol;
+        when VdpCmdNOT =>
+          logOpDestCol := not logOpSoucCol;
+        when VdpCmdTIMP =>
+          if( logOpSoucCol /= 0 ) then
+            logOpDestCol := logOpSoucCol;
+          end if;
+        when VdpCmdTAND =>
+          if( logOpSoucCol /= 0 ) then
+            logOpDestCol := logOpSoucCol and logOpDestCol;
+          end if;
+        when VdpCmdTOR =>
+          if( logOpSoucCol /= 0 ) then
+            logOpDestCol := logOpSoucCol or logOpDestCol;
+          end if;
+        when VdpCmdTEOR =>
+          if( logOpSoucCol /= 0 ) then
+            logOpDestCol := logOpSoucCol xor logOpDestCol;
+          end if;
+        when VdpCmdTNOT =>
+          if( logOpSoucCol /= 0 ) then
+            logOpDestCol := not logOpSoucCol;
+          end if;
+        when others => null;
+      end case;
+      
+      -- process
+      if( VdpCmdRegWrReq /= VdpCmdRegWrAck ) then
+        VdpCmdRegWrAck <= not VdpCmdRegWrAck;
+        case VdpCmdRegNum is
+          when "0000" =>    -- #32
+            VdpCmdSX(7 downto 0) <= VdpCmdRegData;
+          when "0001" =>    -- #33
+            VdpCmdSX(8) <= VdpCmdRegData(0);
+          when "0010" =>    -- #34
+            VdpCmdSY(7 downto 0) <= VdpCmdRegData;
+          when "0011" =>    -- #35
+            VdpCmdSY(9 downto 8) <= VdpCmdRegData(1 downto 0);
+          when "0100" =>    -- #36
+            VdpCmdDX(7 downto 0) <= VdpCmdRegData;
+          when "0101" =>    -- #37
+            VdpCmdDX(8) <= VdpCmdRegData(0);
+          when "0110" =>    -- #38
+            VdpCmdDY(7 downto 0) <= VdpCmdRegData;
+          when "0111" =>    -- #39
+            VdpCmdDY(9 downto 8) <= VdpCmdRegData(1 downto 0);
+          when "1000" =>    -- #40
+            VdpCmdNX(7 downto 0) <= VdpCmdRegData;
+          when "1001" =>    -- #41
+            VdpCmdNX(8) <= VdpCmdRegData(0);
+          when "1010" =>    -- #42
+            VdpCmdNY(7 downto 0) <= VdpCmdRegData;
+          when "1011" =>    -- #43
+            VdpCmdNY(9 downto 8) <= VdpCmdRegData(1 downto 0);
+          when "1100" =>    -- #44
+            VdpCmdCLR <= VdpCmdRegData;
+            VdpCmdCLRWr <= '1';
+          when "1101" =>    -- #45
+            VdpCmdDIX <= VdpCmdRegData(2);
+            VdpCmdDIY <= VdpCmdRegData(3);
+            VdpCmdMXD <= VdpCmdRegData(5);
+          when "1110" =>    -- #46
+            -- JP: コマンド実行中は書き込まない
+            if( VdpCmdState = stVdpCmdIdle ) then
+              VdpCmdCMR <= VdpCmdRegData;
+              VdpCmdCMRWr <= '1';
+            elsif( VdpCmdRegData = "0000" ) then
+              -- stop command (force break command execution)
+              VdpCmdState <= stVdpCmdIdle;
+              VdpCmdCMR <= VdpCmdRegData;
+            end if;
+          when others =>
+            null;
+        end case;
+      elsif( VdpCmdTRClrReq /= VdpCmdTRClrAck ) then
+        -- JP: LMCMコマンドで必要
+        -- JP: 他のTRビットを使うコマンドとの兼ね合いは大丈夫か?
+        VdpCmdTRClrAck <= not VdpCmdTRClrAck;
+        VdpCmdTR <= '0';
+      else
+        case VdpCmdState is
+          when stVdpCmdIdle =>
+            if( VdpCmdCMRWr = '0' ) then
+--              VdpCmdTR <= '1';
+              VdpCmdCE <= '0';
+              VdpCmdCE <= '0';
+            else
+              -- exec VDP Command
+              VdpCmdCMRWr <= '0';
+              --
+--              VdpCmdTR <= '0';
+              VdpCmdCE <= '1';
+              if( VdpCmdCMR(7 downto 4) = VdpCmdYMMM ) then
+                VdpCmdSXTmp <= VdpCmdDX;
+              else
+                VdpCmdSXTmp <= VdpCmdSX;
+              end if;
+              VdpCmdDXTmp <= VdpCmdDX;
+              VdpCmdNXTmp <= nxCount;
+              case VdpCmdCMR(7 downto 4) is
+                when VdpCmdHMMC =>
+                  VdpCmdCLRWr <= '1';   -- JP:最初の色は設定済み
+                  VdpCmdState <= stVdpCmdRdCPU;
+                when VdpCmdYMMM =>
+                  VdpCmdState <= stVdpCmdRdVram;
+                when VdpCmdHMMM =>
+                  VdpCmdState <= stVdpCmdRdVram;
+                when VdpCmdHMMV =>
+                  VdpCmdVramWrData <= VdpCmdCLR;   -- JP:塗りつぶす色
+                  VdpCmdState <= stVdpCmdWrVram;
+                when VdpCmdLMMC =>
+                  VdpCmdCLRWr <= '1';              -- JP:最初の色は設定済み
+                  VdpCmdState <= stVdpCmdRdCPU;
+                when VdpCmdLMCM =>
+                  VdpCmdState <= stVdpCmdWaitCPU;
+                when VdpCmdLMMM =>
+                  VdpCmdState <= stVdpCmdRdVram;
+                when VdpCmdLMMV =>
+                  VdpCmdVramWrData <= VdpCmdCLR;   -- JP:塗りつぶす色
+                  VdpCmdState <= stVdpCmdPreRdVram;
+                when others =>
+                  VdpCmdState <= stVdpCmdExecEnd;
+              end case;
+            end if;
+          when stVdpCmdRdCPU =>
+            VdpCmdTR <= '1';            -- JP: ここで 1を立てるのは遅い?
+            if( VdpCmdCLRWr = '1' ) then
+              VdpCmdCLRWr <= '0';
+              VdpCmdTR <= '0';
+              VdpCmdVramWrData <= VdpCmdCLR;
+              -- check logical command
+              case VdpCmdCMR(7 downto 4) is
+                when VdpCmdLMMC =>
+                  VdpCmdState <= stVdpCmdPreRdVram;
+                when others =>
+                  VdpCmdState <= stVdpCmdWrVram;
+              end case;
+            end if;
+
+            -- JP: LMCMコマンドのCPUのリード待ち
+            -- JP: LMCMは最後のドットを処理すると TR=1の状態で CE=0となり
+            -- JP: LMCMコマンドの実行は終了する
+            -- JP: なので、TR=0になっているかどうかのチェックはVRAMリードの
+            -- JP: 直前に行う
+          when stVdpCmdWaitCPU =>
+            if( VdpCmdTR  = '0' ) then
+              VdpCmdVramWrData <= VdpCmdCLR;
+              VdpCmdState <= stVdpCmdRdVram;
+            end if;
+
+          when stVdpCmdRdVram =>
+            -- GRAPHIC4(SCREEN5)
+            VdpCmdVramAccessAddr <= VdpCmdSY & VdpCmdSxTmp(7 downto 1);
+            VdpCmdVramRdReq <= not VdpCmdVramRdAck;
+--            VdpCmdVramRdReq <= VdpCmdVramRdAck;
+            VdpCmdState <= stVdpCmdWaitRdVram;
+          when stVdpCmdWaitRdVram =>
+            if ( VdpCmdVramRdReq = VdpCmdVramRdAck ) then
+              -- 読み込み完了
+              if( VdpCmdDIX = '0' ) then
+                VdpCmdSxTmp <= VdpCmdSxTmp + xCountUp;
+              else
+                VdpCmdSxTmp <= VdpCmdSxTmp - xCountUp;
+              end if;
+              -- check logical command
+              case VdpCmdCMR(7 downto 4) is
+                when VdpCmdLMMM =>
+                  if( VdpCmdSxTmp(0) = '0' ) then
+                    -- GRAPHIC4
+                    VdpCmdVramWrData(3 downto 0) <= VdpCmdVramRdData(7 downto 4);
+                  else
+                    -- GRAPHIC4
+                    VdpCmdVramWrData(3 downto 0) <= VdpCmdVramRdData(3 downto 0);
+                  end if;
+                  VdpCmdState <= stVdpCmdPreRdVram;
+                when VdpCmdLMCM =>
+                  if( VdpCmdSxTmp(0) = '0' ) then
+                    -- GRAPHIC4
+                    -- JP: 偶数座標
+                    VdpS7ReadData <= "0000" & VdpCmdVramRdData(7 downto 4);
+                  else
+                    -- GRAPHIC4
+                    VdpS7ReadData <= "0000" & VdpCmdVramRdData(3 downto 0);
+                  end if;
+                  VdpCmdTR <= '1';
+                  VdpCmdState <= stVdpCmdChkLoop;
+                when others =>
+                  VdpCmdVramWrData <= VdpCmdVramRdData;
+                  VdpCmdState <= stVdpCmdWrVram;
+              end case;
+            end if;
+
+          -- JP: ロジカルオペレーションのための転送先VRAM読みだし
+          when stVdpCmdPreRdVram =>
+            -- GRAPHIC4(SCREEN5)
+            VdpCmdVramAccessAddr <= VdpCmdDY & VdpCmdDxTmp(7 downto 1);
+            VdpCmdVramRdReq <= not VdpCmdVramRdAck;
+            VdpCmdState <= stVdpCmdWaitPreRdVram;
+          when stVdpCmdWaitPreRdVram =>
+            if ( VdpCmdVramRdReq = VdpCmdVramRdAck ) then
+              -- 読み込み完了
+              if( VdpCmdDxTmp(0) = '0' ) then
+                -- JP: 偶数座標
+                VdpCmdVramWrData <= logOpDestCol(3 downto 0) &
+                                    VdpCmdVramRdData(3 downto 0);  -- GRAPHIC4
+              else
+                -- JP: 奇数座標
+                VdpCmdVramWrData <= VdpCmdVramRdData(7 downto 4) &
+                                    logOpDestCol(3 downto 0);  -- GRAPHIC4
+              end if;
+              VdpCmdState <= stVdpCmdWrVram;
+            end if;
+
+          -- JP: 書き込み系
+          when stVdpCmdWrVram =>
+            VdpCmdVramAccessAddr <= VdpCmdDY & VdpCmdDxTmp(7 downto 1);  -- GRAPHIC4
+            VdpCmdVramWrReq <= not VdpCmdVramWrAck;
+            VdpCmdState <= stVdpCmdWaitWrVram;
+          when stVdpCmdWaitWrVram =>
+            if ( VdpCmdVramWrReq = VdpCmdVramWrAck ) then
+              -- 書き込み完了
+              if( VdpCmdDIX = '0' ) then
+                VdpCmdDxTmp <= VdpCmdDxTmp + xCountUp;
+              else
+                VdpCmdDxTmp <= VdpCmdDxTmp - xCountUp;
+              end if;
+              VdpCmdNXTmp <= VdpCmdNXTmp - 1;
+              VdpCmdState <= stVdpCmdChkLoop;
+            end if;            
+          when stVdpCmdChkLoop =>
+            -- JP: 繰り返し条件のチェック
+            if( (nxLoopEnd = '1') and (VdpCmdNY = 1) ) then
+              -- JP: 実行終了
+              VdpCmdState <= stVdpCmdExecEnd;
+            else
+              --
+              case VdpCmdCMR(7 downto 4) is
+                when VdpCmdHMMC =>
+                  VdpCmdState <= stVdpCmdRdCPU;
+                when VdpCmdYMMM =>
+                  VdpCmdState <= stVdpCmdRdVram;
+                when VdpCmdHMMM =>
+                  VdpCmdState <= stVdpCmdRdVram;
+                when VdpCmdHMMV =>
+                  VdpCmdState <= stVdpCmdWrVram;
+                when VdpCmdLMMC =>
+                  VdpCmdState <= stVdpCmdRdCPU;
+                when VdpCmdLMMM =>
+                  VdpCmdState <= stVdpCmdRdVram;
+                when VdpCmdLMMV =>
+                  VdpCmdVramWrData <= VdpCmdCLR;   -- JP:塗りつぶす色
+                  VdpCmdState <= stVdpCmdPreRdVram;
+                when others =>
+                  VdpCmdState <= stVdpCmdExecEnd;
+              end case;
+            end if;
+            if( nxLoopEnd = '1' ) then
+              VdpCmdNXTmp <= nxCount;   -- reset counter
+              VdpCmdSXTmp <= VdpCmdSX;
+              VdpCmdDXTmp <= VdpCmdDX;
+              VdpCmdNY <= VdpCmdNY - 1;
+              if( VdpCmdDIY = '0' ) then
+                if( (VdpCmdCMR(7 downto 4) = VdpCmdHMMM) or
+                    (VdpCmdCMR(7 downto 4) = VdpCmdYMMM) or
+                    (VdpCmdCMR(7 downto 4) = VdpCmdLMMM) ) then
+                  VdpCmdSy <= VdpCmdSy + 1;
+                end if;
+                VdpCmdDy <= VdpCmdDy + 1;
+              else
+                if( (VdpCmdCMR(7 downto 4) = VdpCmdHMMM) or
+                    (VdpCmdCMR(7 downto 4) = VdpCmdYMMM) or
+                    (VdpCmdCMR(7 downto 4) = VdpCmdLMMM) ) then
+                  VdpCmdSy <= VdpCmdSy - 1;
+                end if;
+                VdpCmdDy <= VdpCmdDy - 1;
+              end if;
+            end if;
+          when stVdpCmdExecEnd =>
+            -- JP: VDPコマンド実行終了
+            VdpCmdState <= stVdpCmdIdle;
+            VdpCmdCE <= '0';
+            VdpCmdTR <= '1';            -- JP: ここで 1にしてしまって良いかわからない
+          when others =>
+            VdpCmdState <= stVdpCmdIdle;
+        end case;
+      end if;
+    end if;
+  end process;
+
 
 end rtl;

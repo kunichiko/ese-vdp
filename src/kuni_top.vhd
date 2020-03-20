@@ -449,7 +449,7 @@ begin
   pSltRfsh_n<= pCpuRfsh_n when SelfMode = '1' else 'Z';
 --pSltRfsh_n<= 'Z';
 
-  pSltWait_n<= 'Z';
+--pSltWait_n<= 'Z';
 --pSltInt_n <= pVdpInt_n  when SelfMode = '1' else 'Z';
   pSltInt_n <= pVdpInt_n;
 
@@ -924,7 +924,8 @@ begin
 --      VideoDHClk, VideoDLClk, VideoSC, pVideoSYNC, Reso
     );
 
-  Reso <= pKeyKana;
+--  Reso <= pKeyKana;
+  Reso <= '1';
 
   ----------------------------------------------------------------
   -- 1 bit D/A  control
