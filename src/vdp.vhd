@@ -7,6 +7,10 @@
 --
 -- JP: 日本語のコメント行は JP:を頭に付ける事にする
 --
+-- 30th,December,2003 modified by Kazuhiro Tsujikawa
+-- JP: 起動時の画面モードをNTSCと VGAのどちらにするかを，外部入力で切替
+-- JP: DHClk/DLClkを一時的に復活させた
+--
 -- 16th,December,2003 modified by Kunihiko Ohnaka
 -- JP: 起動時の画面モードをNTSCと VGAのどちらにするかを，vdp_package.vhd
 -- JP: 内で定義された定数で切替えるようにした．
@@ -77,9 +81,15 @@ entity vdp is
     pVideoVS_n : out std_logic;
     pVideoCS_n : out std_logic;
 
+    pVideoDHClk : out std_logic;
+    pVideoDLClk : out std_logic;
+
     -- CXA1645(RGB->NTSC encoder) signals
     pVideoSC : out std_logic;
-    pVideoSYNC : out std_logic
+    pVideoSYNC : out std_logic;
+
+    -- Display resolution (0=15kHz, 1=31kHz)
+    DispReso : in  std_logic
     );
 end vdp;
 
@@ -862,6 +872,8 @@ begin
       iVideoR <= "000000";
       iVideoG <= "000000";
       iVideoB <= "000000";
+      pVideoDHClk <= '0';
+      pVideoDLClk <= '0';
 
       paletteWrAckRB <= '0';
       paletteWrAckG <= '0';
@@ -886,16 +898,26 @@ begin
     elsif (clk21m'event and clk21m = '1') then
       if( h_counter = CLOCKS_PER_LINE-1) then
         dotState <= "00";
+        pVideoDHClk <= '1';
+        pVideoDLClk <= '1';
       else
         case dotState is
           when "00" =>
             dotState <= "01";
+            pVideoDHClk <= '0';
+            pVideoDLClk <= '1';
           when "01" =>
             dotState <= "11";
+            pVideoDHClk <= '1';
+            pVideoDLClk <= '0';
           when "11" =>
             dotState <= "10";
+            pVideoDHClk <= '0';
+            pVideoDLClk <= '0';
           when "10" =>
             dotState <= "00";
+            pVideoDHClk <= '1';
+            pVideoDLClk <= '1';
           when others => null;
         end case;
       end if;
@@ -1708,7 +1730,6 @@ begin
       paletteWrReqG <= '0';
       paletteWrNum <= (others => '0');
 
-      dispModeVGA <= DISPLAY_MODE;
     elsif (clk21m'event and clk21m = '1') then
 
       if (req = '1' and wrt = '0') then
@@ -1754,11 +1775,11 @@ begin
         end case;
 
       elsif (req = '1' and wrt = '1') then
-        case adr(2 downto 0) is
-          when "000"   => -- port#0 write
+        case adr(1 downto 0) is
+          when "00"   => -- port#0 write
             VdpVramAccessData <= dbo;
             VdpVramWrReq <= not VdpVramWrAck;
-          when "001"   => -- port#1 write
+          when "01"   => -- port#1 write
             if(VdpP1Is1stByte = '1') then
               VdpP1Is1stByte <= '0';
               VdpP1Data <= dbo;
@@ -1787,7 +1808,7 @@ begin
               end case;
             end if;
 
-          when "010"   => -- port#2 write
+          when "10"   => -- port#2 write
             if(VdpP2Is1stByte = '1') then
               paletteWrTemp <= dbo;
               paletteWrNum <= VdpR16PalNum;
@@ -1801,7 +1822,7 @@ begin
               VdpR16PalNum <= VdpR16PalNum + 1;
             end if;
 
-          when "011" => -- port#3 write
+          when "11" => -- port#3 write
             -- JP: 間接指定では R#17の値は書き換えられない
             if( VdpR17RegNum /= "010001" ) then
               VdpRegWrPulse <= '1';
@@ -1811,9 +1832,6 @@ begin
             if( VdpR17IncRegNum = '1' ) then
               VdpR17RegNum <= VdpR17RegNum + 1;
             end if;
-
-          when "100"   => -- port#4 write (expansion)
-            dispModeVGA <= dbo(0);
 
           when others =>
             null;
@@ -1877,5 +1895,8 @@ begin
 
     end if;
   end process;
+
+  -- Display resolution (0=15kHz, 1=31kHz)
+  dispModeVGA <= DispReso;
 
 end rtl;

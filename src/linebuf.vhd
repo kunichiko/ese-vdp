@@ -13,7 +13,8 @@ entity linebuf is
 end linebuf;
 
 architecture RTL of linebuf is
-  type Mem is array (639 downto 0) of std_logic_vector(5 downto 0);
+--  type Mem is array (639 downto 0) of std_logic_vector(5 downto 0);
+  type Mem is array (639 downto 0) of std_logic_vector(3 downto 0);
   signal iMem  : Mem;
   signal iAddress : std_logic_vector(9 downto 0);
 
@@ -23,12 +24,14 @@ architecture RTL of linebuf is
   begin
     if (inclock'event and inclock ='1') then
       if (we = '1') then
-        iMem(conv_integer(address)) <= data;
+--        iMem(conv_integer(address)) <= data(5 downto 0);
+        iMem(conv_integer(address)) <= data(5 downto 2);
       end if;
       iAddress <= address;
     end if;
   end process;
 
-  q <= iMem(conv_integer(iAddress));
+--  q <= iMem(conv_integer(iAddress));
+  q <= iMem(conv_integer(iAddress)) & "00";
 
 end RTL;

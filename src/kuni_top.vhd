@@ -79,7 +79,10 @@ entity kuni_top is
 
     -- Sound output
     pSltSnd_L   : inout std_logic_vector( 5 downto 0);    -- KuniBoard only
-    pSltSnd_R   : inout std_logic_vector( 5 downto 0);    -- KuniBoard only
+--    pSltSnd_R   : inout std_logic_vector( 5 downto 0);    -- KuniBoard only
+    pSltSnd_R   : inout std_logic_vector( 4 downto 1);
+    pPs2Clk     : inout std_logic;
+    pPs2Dat     : inout std_logic;
 --  pSltSound   : inout std_logic_vector( 5 downto 0);    -- KuniBoard only
 
     pSelf       : in std_logic;
@@ -261,10 +264,16 @@ architecture rtl of kuni_top is
     pVideoVS_n : out std_logic;
     pVideoCS_n : out std_logic;
 
+    pVideoDHClk : out std_logic;
+    pVideoDLClk : out std_logic;
+
     -- CXA1645(RGB->NTSC encoder) signals
     pVideoSC : out std_logic;
     pVideoSYNC : out std_logic
-  );
+
+    -- Display resolution (0=15kHz, 1=31kHz)
+    DispReso : in  std_logic
+    );
   end component;
 
   component rtc
@@ -429,6 +438,22 @@ architecture rtl of kuni_top is
   signal RtcAck      : std_logic;
   signal RtcDbi      : std_logic_vector(7 downto 0);
 
+  -- alias
+  alias KeyClick : std_logic is PpiPortC(7);
+
+  -- PS/2 signals
+  signal KeyWe   : std_logic;
+  signal KeyRow  : std_logic_vector(7 downto 0);
+  signal iKeyCol : std_logic_vector(7 downto 0);
+  signal oKeyCol : std_logic_vector(7 downto 0);
+
+  signal Ps2Dbi1 : std_logic_vector(7 downto 0);
+  signal Ps2Dbi2 : std_logic_vector(7 downto 0);
+  signal Ps2Dbi3 : std_logic_vector(7 downto 0);
+  signal Ps2Dbi4 : std_logic_vector(7 downto 0);
+  signal Ps2Dbi5 : std_logic_vector(7 downto 0);
+  signal Ps2Dbi6 : std_logic_vector(7 downto 0);
+  
 begin
 
   ----------------------------------------------------------------
@@ -914,7 +939,8 @@ pKeyCaps <= 'Z';
       clk21m, reset, VdpReq, VdpAck, wrt, adr, VdpDbi, dbo, pVdpInt_n, 
       OeVdp_n, WeVdp_n, VdpAdr, pRamDatX, 
       pVideoR, pVideoG, pVideoB, pVideoHS_n, pVideoVS_n, open, 
-      VideoSC, pVideoSYNC
+      open, open, VideoSC, pVideoSYNC, Reso
+--      VideoDHClk, VideoDLClk, VideoSC, pVideoSYNC, Reso
     );
 
   ----------------------------------------------------------------
@@ -953,9 +979,9 @@ pKeyCaps <= 'Z';
       AcuR := ('0' & AcuR(10 downto 0)) + ('0' & AmpR(10 downto 0));
       Acu  := ('0' & Acu(10 downto 0)) + ('0' & Amp(10 downto 0));
 
-      pSltSndL <= (AmpL(15)) & AmpL(14 downto 11) & AcuL(11);
-      pSltSndR <= (AmpR(15)) & AmpR(14 downto 11) & AcuR(11);
-      pSltSound <= (Amp(15)) & Amp(14 downto 11) & Acu(11);
+      pSltSndL <= (AmpL(15) xor KeyClick) & AmpL(14 downto 11) & AcuL(11);
+      pSltSndR <= (AmpR(15) xor KeyClick) & AmpR(14 downto 11) & AcuR(11);
+      pSltSound <= (Amp(15) xor KeyClick) & Amp(14 downto 11) & Acu(11);
 
     end if;
 
@@ -971,4 +997,290 @@ pKeyCaps <= 'Z';
   MMC_DO <= pSltSnd_R(4);
   pSltSnd_R(4) <= 'Z';
 
+
+
+  ----------------------------------------------------------------
+  -- PS/2 keyboard interface
+  ----------------------------------------------------------------
+  process(clk21m, reset)
+
+    type typPs2Seq is (Ps2Idle, Ps2Rxd, Ps2Txd, Ps2Stop);
+    variable Ps2Seq : typPs2Seq;
+    variable Ps2Chg : std_logic;
+    variable Ps2brk : std_logic;
+    variable Ps2xE0 : std_logic;
+    variable Ps2xE1 : std_logic;
+    variable Ps2Cnt : std_logic_vector(3 downto 0);
+    variable Ps2Clk : std_logic_vector(2 downto 0);
+    variable Ps2Dat : std_logic_vector(7 downto 0);
+    variable Ps2Led : std_logic_vector(8 downto 0);
+    variable timout : std_logic_vector(15 downto 0);
+
+    variable Ps2Caps : std_logic;
+    variable Ps2Kana : std_logic;
+    variable Ps2Paus : std_logic;
+
+    type typMtxSeq is (MtxIdle, MtxRead, MtxWrite);
+    variable MtxSeq : typMtxSeq;
+    variable MtxPtr : std_logic_vector(7 downto 0);
+
+    type rom_type is array (0 to 511) of std_logic_vector(7 downto 0);
+    constant key_table : rom_type := (
+        X"FF", X"FF", X"FF", X"17", X"76", X"56", X"66", X"FF", -- 00
+        X"FF", X"FF", X"FF", X"FF", X"07", X"37", X"67", X"FF", -- 08
+        X"FF", X"26", X"06", X"46", X"16", X"64", X"10", X"FF", -- 10
+        X"FF", X"FF", X"75", X"05", X"62", X"45", X"20", X"FF", -- 18
+        X"FF", X"03", X"55", X"13", X"23", X"40", X"30", X"FF", -- 20
+        X"FF", X"08", X"35", X"33", X"15", X"74", X"50", X"FF", -- 28
+        X"FF", X"34", X"72", X"53", X"43", X"65", X"60", X"FF", -- 30
+        X"FF", X"FF", X"24", X"73", X"25", X"70", X"01", X"FF", -- 38
+        X"FF", X"22", X"04", X"63", X"44", X"00", X"11", X"FF", -- 40
+        X"FF", X"32", X"42", X"14", X"71", X"54", X"21", X"FF", -- 48
+        X"FF", X"52", X"02", X"FF", X"51", X"31", X"FF", X"FF", -- 50
+        X"36", X"06", X"77", X"61", X"FF", X"12", X"FF", X"FF", -- 58
+        X"FF", X"FF", X"FF", X"FF", X"1B", X"FF", X"57", X"3B", -- 60
+        X"FF", X"49", X"41", X"79", X"2A", X"FF", X"FF", X"FF", -- 68
+        X"39", X"7A", X"59", X"0A", X"1A", X"3A", X"27", X"6A", -- 70
+        X"FF", X"19", X"69", X"5A", X"09", X"4A", X"FF", X"FF", -- 78
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- 80
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- 88
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- 90
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- 98
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- A0
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- A8
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- B0
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- B8
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- C0
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- C8
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- D0
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- D8
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- E0
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- E8
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- F0
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- F8
+
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- 00
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- 08
+        X"FF", X"26", X"FF", X"FF", X"16", X"FF", X"FF", X"FF", -- 10
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- 18
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- 20
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- 28
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- 30
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- 38
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- 40
+        X"FF", X"FF", X"29", X"FF", X"FF", X"FF", X"FF", X"FF", -- 48
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- 50
+        X"FF", X"FF", X"77", X"FF", X"FF", X"FF", X"FF", X"FF", -- 58
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- 60
+        X"FF", X"47", X"FF", X"48", X"18", X"FF", X"FF", X"FF", -- 68
+        X"28", X"38", X"68", X"FF", X"78", X"58", X"FF", X"FF", -- 70
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- 78
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- 80
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- 88
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- 90
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- 98
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- A0
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- A8
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- B0
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- B8
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- C0
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- C8
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- D0
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- D8
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- E0
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- E8
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", -- F0
+        X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF", X"FF"  -- F8
+    );
+
+  begin
+
+    if (reset = '1') then
+
+      Ps2Seq := Ps2Idle;
+      Ps2Chg := '0';
+      Ps2brk := '0';
+      Ps2xE0 := '0';
+      Ps2xE1 := '0';
+      Ps2Cnt := (others => '0');
+      Ps2Clk := (others => '1');
+      Ps2Dat := (others => '1');
+      timout := (others => '1');
+      Ps2Led := (others => '1');
+
+      Ps2Caps := '1';
+      Ps2Kana := '1';
+      Ps2Paus := '0';
+      Paus    <= '0';
+      Reso    <= '0';
+
+      MtxSeq := MtxIdle;
+      MtxPtr := (others => '0');
+
+      pPs2Clk <= 'Z';
+      pPs2Dat <= 'Z';
+      pKeyX <= (others => 'Z');
+
+      KeyWe   <= '0';
+      KeyRow  <= (others => '0');
+      iKeyCol <= (others => '0');
+
+--    Ps2dbi1 <= (others => '1');
+--    Ps2dbi2 <= (others => '1');
+--    Ps2dbi3 <= (others => '1');
+--    Ps2dbi4 <= (others => '1');
+--    Ps2dbi5 <= (others => '1');
+--    Ps2dbi6 <= (others => '1');
+
+    elsif (clk21m'event and clk21m = '1') then
+
+      -- "Scan table > MSX key-matrix" conversion
+      if (clkena = '1') then
+
+        case MtxSeq is
+          when MtxIdle =>
+            if (Ps2Chg = '1') then 
+              MtxSeq := MtxRead;
+              pKeyX <= (others => 'Z');
+              KeyRow <= "0000" & MtxPtr(3 downto 0);
+            else
+              for i in 7 downto 0 loop
+                if (oKeyCol(i) = '1') then
+                  pKeyX(i) <= '0';
+                else
+                  pKeyX(i) <= 'Z';
+                end if;
+              end loop;
+              KeyRow <= "0000" & PpiPortC(3 downto 0);
+            end if;
+          when MtxRead  =>
+            MtxSeq := MtxWrite;
+            KeyWe <= not Ps2xE1;
+            iKeyCol <= oKeyCol;
+            iKeyCol(conv_integer(MtxPtr(6 downto 4))) <= not Ps2brk;
+          when MtxWrite  =>
+            MtxSeq := MtxIdle;
+            KeyWe <= '0';
+            KeyRow <= "0000" & PpiPortC(3 downto 0);
+            Ps2Chg := '0';
+            Ps2brk := '0';
+            Ps2xE0 := '0';
+            Ps2xE1 := '0';
+          when others =>
+            MtxSeq := MtxIdle;
+        end case;
+
+      end if;
+
+      -- "PS/2 interface > Scan table" conversion
+      if (clkena = '1') then
+
+        if (Ps2Clk = "100") then        -- clk inactive
+          Ps2Clk(2) := '0';
+          timout := X"01FF";            -- countdown timeout (143us = 279ns x 512clk, exceed 100us)
+
+          if (Ps2Seq = Ps2Idle) then
+            pPs2Dat <= 'Z';
+            Ps2Seq := Ps2Rxd;
+            Ps2Cnt := (others => '0');
+          elsif (Ps2Seq = Ps2Txd) then
+            if (Ps2Cnt = "1000") then
+              Ps2Caps := Caps;
+              Ps2Kana := Kana;
+              Ps2Paus := Paus;
+              Ps2Seq := Ps2Idle;
+            end if;
+            pPs2Dat <= Ps2Led(0);
+            Ps2Led := Ps2Led(0) & Ps2Led(8 downto 1);
+            Ps2Dat := '1' & Ps2Dat(7 downto 1);
+            Ps2Cnt := Ps2Cnt + 1;
+          elsif (Ps2Seq = Ps2Rxd) then
+            if (Ps2Cnt = "0111") then
+              Ps2Seq := Ps2Stop;
+            end if;
+            Ps2Dat := pPs2Dat & Ps2Dat(7 downto 1);
+            Ps2Cnt := Ps2Cnt + 1;
+          elsif (Ps2Seq = Ps2Stop) then
+            Ps2Seq := Ps2Idle;
+            if (Ps2Dat = X"AA") then    -- BAT code (basic assurance test)
+              Ps2Caps := not Caps;
+              Ps2Kana := not Kana;
+              Ps2Paus := not Paus;
+            elsif (Ps2Dat = X"14" and Ps2brk = '0' and Ps2xE0 = '0' and Ps2xE1 = '1') then -- pause/break make
+              Paus <= not Paus;         -- CPU pause
+            elsif (Ps2Dat = X"7C" and Ps2brk = '0' and Ps2xE0 = '1' and Ps2xE1 = '0') then -- printscreen make
+              Reso <= not Reso;         -- toggle screen resolution(15kHz<>31kHz)
+--          elsif (Ps2Dat = X"7E" and Ps2brk = '0' and Ps2xE0 = '0' and Ps2xE1 = '0') then -- scroll-lock make
+--            null;
+            elsif (Ps2Dat = X"F0") then -- break code
+              Ps2brk := '1';
+            elsif (Ps2Dat = X"E0") then -- extnd code E0
+              Ps2xE0 := '1';
+            elsif (Ps2Dat = X"E1") then -- extnd code E1 (ignore)
+              Ps2xE1 := '1';
+            elsif (Ps2Dat = X"FA") then  -- Ack of "EDh" command
+              Ps2Seq := Ps2Idle;
+            else
+              Ps2Chg := '1';
+            end if;
+--          Ps2Dbi6 <= Ps2Dbi5;
+--          Ps2Dbi5 <= Ps2Dbi4;
+--          Ps2Dbi4 <= Ps2Dbi3;
+--          Ps2Dbi3 <= Ps2Dbi2;
+--          Ps2Dbi2 <= Ps2Dbi1;
+--          Ps2Dbi1 <= Ps2Dat;
+          end if;
+
+        elsif (Ps2Clk = "011") then     -- clk active
+          Ps2Clk(2) := '1';
+          timout := X"01FF";            -- countdown timeout (143us = 279ns x 512clk, exceed 100us)
+
+        elsif (timout = X"0000") then   -- timeout
+
+          pPs2Dat <= 'Z';
+          Ps2Seq := Ps2Idle;            -- to Idle state
+
+          if (Ps2Seq = Ps2Idle and Ps2Clk(2) = '1') then
+
+            if (Ps2Dat = X"FA") then
+--            Ps2Dbi6 <= X"00";
+--            Ps2Dbi5 <= X"11";
+--            Ps2Dbi4 <= X"22";
+--            Ps2Dbi3 <= X"33";
+--            Ps2Dbi2 <= X"44";
+--            Ps2Dbi1 <= X"55";
+            end if;
+
+            if (Ps2Dat = X"FA" and Ps2Led = "111101101") then
+              Ps2Seq := Ps2Txd;         -- Tx data state
+              pPs2Dat <= '0';
+              Ps2Led := (Caps xor Kana xor Paus xor '1') & "00000" & (not Caps) & (not Kana) & Paus;
+              timout := X"FFFF";        -- countdown timeout (18.3ms = 279ns x 65536clk, exceed 1ms)
+
+            elsif (Caps /= Ps2Caps or Kana /= Ps2Kana or Paus /= Ps2Paus) then
+              Ps2Seq := Ps2Txd;         -- Tx data state
+              pPs2Dat <= '0';
+              Ps2Led := "111101101";    -- Command EDh
+              timout := X"FFFF";        -- countdown timeout (18.3ms = 279ns x 65536clk, exceed 1ms)
+
+            end if;
+          end if;
+
+        else
+          timout := timout - 1;         -- countdown timeout (143us = 279ns x 512clk, exceed 100us)
+
+        end if;
+
+        Ps2Clk(1) := Ps2Clk(0);
+        Ps2Clk(0) := pPs2Clk;
+        MtxPtr := key_table(conv_integer(Ps2xE0 & Ps2Dat));
+
+      end if;
+
+    end if;
+
+  end process;
+
+  U9 : ram port map(KeyRow, clk21m, KeyWe, iKeyCol, oKeyCol);
+  
 end rtl;
